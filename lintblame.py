@@ -7,6 +7,7 @@ import sys
 import re
 import time
 import subprocess
+from collections import namedtuple
 
 COLORS = {
     'header': '\033[95m',
@@ -25,6 +26,13 @@ PYLINT_COLORS = {
     'E': 'fail',
     'W': 'white',
 }
+
+REXES = {
+    'pep8': re.compile(r'\w+:(\d+):(\d+):\s(\w+)\s(.+)$', re.MULTILINE),
+    'pylint': re.compile(r'^(\w):\s+(\d+),\s*\d+:\s(.+)$', re.MULTILINE),
+}
+
+Problem = namedtuple('Problem', ['line', 'column', 'code', 'message'])
 
 def color(key, text):
     """Returns text wrapped with color."""
@@ -53,6 +61,7 @@ def validate_file_arg():
         sys.exit("{} is not a python file".format(target_file))
     return target_file
 
+
 def blame(target_file):
     """Returns git blame results."""
     try:
@@ -61,7 +70,8 @@ def blame(target_file):
         sys.exit("Unable to blame file")
     return results
 
-def lint(target_file):
+
+def pylint(target_file):
     """Returns pylint results."""
     proc = subprocess.Popen(
         ['pylint', '--output-format=text', target_file],
@@ -74,28 +84,47 @@ def lint(target_file):
         sys.exit(err)
     return out
 
+
+def pep8(target_file):
+    """Returns pep8 results."""
+    proc = subprocess.Popen(
+        ['pep8', target_file],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE
+    )
+    out, err = proc.communicate()
+    if err:
+        sys.exit(err)
+    return out
+
+def get_problems(target_file):
+    results = pep8(target_file)
+    problems = []
+    for line, col, code, msg in REXES['pep8'].findall(results):
+        problems.append(
+            Problem(
+                line=int(line),
+                column=col,
+                code=code,
+                message=msg.strip()
+            )
+        )
+    return problems
+
 def print_results(target_file, my_name):
     """Prints formatted results."""
     print(color('header', target_file))
-    lint_results = lint(target_file)
     blame_results = blame(target_file)
     blame_lines = blame_results.splitlines()
     blame_name_rex = re.compile(r'\(([\w\s]+)\d{4}')
 
-    lints = re.findall(
-        r'^(\w):\s+(\d+),\s*\d+:\s(.+)$',
-        lint_results,
-        re.MULTILINE
-    )
+    problems = get_problems(target_file)
 
-    if len(lints) == 0:
+    if len(problems) == 0:
         print(color('bold', 'All clean!'))
-    for i, lint_parts in enumerate(lints):
-        lint_code = lint_parts[0]
-        line_no = int(lint_parts[1])
-        color_key = PYLINT_COLORS.get(lint_code)
-
-        name_match = blame_name_rex.search(blame_lines[line_no - 1])
+    for i, problem in enumerate(problems):
+        color_key = PYLINT_COLORS.get(problem.code)
+        name_match = blame_name_rex.search(blame_lines[problem.line - 1])
         if name_match:
             name = name_match.group(1).strip()
         else:
@@ -115,20 +144,23 @@ def print_results(target_file, my_name):
             name_str = '[{}]'.format(name)
 
         print('{lineno}: [{code}] {message} {name}'.format(
-            code=color(color_key, lint_code),
-            lineno=line_no,
-            message=color(color_key, lint_parts[2]),
+            code=color(color_key, problem.code),
+            lineno=problem.line,
+            message=color(color_key, problem.message),
             name=name_str
         ))
-        print
+    print
+
 
 def clear():
     os.system('cls' if os.name=='nt' else 'clear')
+
 
 def get_git_path():
     return subprocess.check_output(
         ['git', 'rev-parse', '--show-toplevel']
     ).strip()
+
 
 def get_branch_files():
     changed_files = subprocess.check_output(['git', 'diff', '--name-only'])
@@ -148,7 +180,6 @@ def get_target_files():
 
 def get_additional_files(current_files):
     target_files = get_target_files()
-
     return (
         [f for f in target_files if f not in current_files],
         [f for f in current_files if f not in target_files],
