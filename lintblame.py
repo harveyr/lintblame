@@ -187,7 +187,7 @@ def watch(files):
         if should_run or loop_count == 0:
             run(modified.keys(), my_name)
         loop_count += 1
-        time.sleep(1.5)
+        time.sleep(2)
 
 if __name__ == '__main__':
     watch(get_target_files())
