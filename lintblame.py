@@ -63,20 +63,20 @@ class Environment(object):
 ENV = Environment()
 
 
-class Problem(object):
+class Issue(object):
     """Represents an issue identified by a linter."""
-    def __init__(self, lint_type, line, column, problem_code, message):
+    def __init__(self, lint_type, line, column, issue_code, message):
         self.lint_type = lint_type
         self.line = int(line)
         self.column = column
-        self.problem_code = problem_code
+        self.issue_code = issue_code
         self.message = message
 
     def __str__(self):
         return '{}, {}: [{}] {}'.format(
             self.line,
             self.column,
-            self.problem_code,
+            self.issue_code,
             self.message
         )
 
@@ -87,7 +87,7 @@ class TargetFile(object):
 
     def __init__(self, path):
         self.path = path
-        self._problems = defaultdict(list)
+        self._issues = defaultdict(list)
         self.lines = []
 
         try:
@@ -102,16 +102,16 @@ class TargetFile(object):
         self.lines = contents.splitlines()
 
     @property
-    def problems(self):
-        """Returns generator that iterates over line, problem."""
-        return self._problems.iteritems()
+    def issues(self):
+        """Returns generator that iterates over line, issue."""
+        return self._issues.iteritems()
 
     @property
-    def has_problems(self):
-        return len(self._problems) > 0
+    def has_issues(self):
+        return len(self._issues) > 0
 
-    def add_problem(self, problem):
-        self._problems[problem.line].append(problem)
+    def add_issue(self, issue):
+        self._issues[issue.line].append(issue)
 
     def author(self, lineno):
         match = self.blame_name_rex.search(self.blame_lines[int(lineno) - 1])
@@ -165,26 +165,26 @@ def pep8(path):
     return out
 
 
-def pylint_problems(path):
+def pylint_issues(path):
     results = pylint(path)
     for code, line, col, msg in REXES['pylint'].findall(results):
-        yield Problem('pylint', line, col, code, msg)
+        yield Issue('pylint', line, col, code, msg)
 
 
-def pep8_problems(path):
+def pep8_issues(path):
     results = pep8(path)
     for line, col, code, msg in REXES['pep8'].findall(results):
-        yield Problem('pep8', line, col, code, msg)
+        yield Issue('pep8', line, col, code, msg)
 
 
 def print_results(target_file):
     """Prints formatted results."""
     print(color('header', target_file.path))
 
-    if not target_file.has_problems:
+    if not target_file.has_issues:
         print(color('bold', 'All clean!'))
     else:
-        for line, problems in target_file.problems:
+        for line, issues in target_file.issues:
             author = target_file.author(line)
             author_color = 'blue'
             if author == ENV.git_name:
@@ -196,12 +196,12 @@ def print_results(target_file):
                 target_file.lines[line - 1].strip(),
             ))
 
-            for problem in problems:
-                color_key = PYLINT_COLORS.get(problem.problem_code)
+            for issue in issues:
+                color_key = PYLINT_COLORS.get(issue.issue_code)
                 print('{space} [{code}] {msg}'.format(
                     space=' '.join(['' for i in range(len(str(line)) + 2)]),
-                    code=problem.problem_code,
-                    msg=color('bold', problem.message)
+                    code=issue.issue_code,
+                    msg=color('bold', issue.message)
                 ))
             print
     print
@@ -253,10 +253,10 @@ def run(files):
         target = TargetFile(path)
         with open(path, 'r') as open_f:
             target.set_contents(open_f.read())
-        for problem in pylint_problems(path):
-            target.add_problem(problem)
-        for problem in pep8_problems(path):
-            target.add_problem(problem)
+        for issue in pylint_issues(path):
+            target.add_issue(issue)
+        for issue in pep8_issues(path):
+            target.add_issue(issue)
         target_files.append(target)
 
     clear()
