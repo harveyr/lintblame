@@ -7,7 +7,9 @@ import sys
 import re
 import time
 import subprocess
-from collections import namedtuple
+import datetime
+from collections import defaultdict
+
 
 COLORS = {
     'header': '\033[95m',
@@ -20,6 +22,7 @@ COLORS = {
     'endc': '\033[0m',
 }
 
+
 PYLINT_COLORS = {
     'C': 'bold',
     'F': 'fail',
@@ -27,29 +30,102 @@ PYLINT_COLORS = {
     'W': 'white',
 }
 
+
 REXES = {
     'pep8': re.compile(r'\w+:(\d+):(\d+):\s(\w+)\s(.+)$', re.MULTILINE),
-    'pylint': re.compile(r'^(\w):\s+(\d+),\s*\d+:\s(.+)$', re.MULTILINE),
+    'pylint': re.compile(r'^(\w):\s+(\d+),\s*(\d+):\s(.+)$', re.MULTILINE),
 }
 
-Problem = namedtuple('Problem', ['line', 'column', 'code', 'message'])
+
+class Environment(object):
+    """Holds certain environmental values."""
+    def __init__(self):
+        self._git_name = False
+
+    @property
+    def git_name(self):
+        """Returns name from .gitconfig or None."""
+
+        if self._git_name is False:
+            path = os.path.expanduser('~/.gitconfig')
+            if os.path.isfile(path):
+                with open(path, 'r') as open_f:
+                    contents = open_f.read()
+                    match = re.search(r'name = (.+)$', contents, re.MULTILINE)
+                    if match:
+                        self._git_name = match.group(1).strip()
+                    else:
+                        self._git_name = None
+            else:
+                self._git_name = None
+        return self._git_name
+
+ENV = Environment()
+
+
+class Problem(object):
+    """Represents an issue identified by a linter."""
+    def __init__(self, lint_type, line, column, problem_code, message):
+        self.lint_type = lint_type
+        self.line = int(line)
+        self.column = column
+        self.problem_code = problem_code
+        self.message = message
+
+    def __str__(self):
+        return '{}, {}: [{}] {}'.format(
+            self.line,
+            self.column,
+            self.problem_code,
+            self.message
+        )
+
+
+class TargetFile(object):
+    """Represents a code file, and holds its linting issues."""
+    blame_name_rex = re.compile(r'\(([\w\s]+)\d{4}')
+
+    def __init__(self, path):
+        self.path = path
+        self._problems = defaultdict(list)
+        self.lines = []
+
+        try:
+            self.blame_lines = subprocess.check_output(
+                ['git', 'blame', self.path]
+            ).splitlines()
+        except subprocess.CalledProcessError:
+            sys.exit("Unable to blame {}".format(self.path))
+
+    def set_contents(self, contents):
+        """Sets contents of the file this object references."""
+        self.lines = contents.splitlines()
+
+    @property
+    def problems(self):
+        """Returns generator that iterates over line, problem."""
+        return self._problems.iteritems()
+
+    @property
+    def has_problems(self):
+        return len(self._problems) > 0
+
+    def add_problem(self, problem):
+        self._problems[problem.line].append(problem)
+
+    def author(self, lineno):
+        match = self.blame_name_rex.search(self.blame_lines[int(lineno) - 1])
+        if match:
+            return match.group(1).strip()
+        return None
+
 
 def color(key, text):
     """Returns text wrapped with color."""
     if not key:
         return text
-    return COLORS[key] + text + COLORS['endc']
+    return ''.join([COLORS[key], str(text), COLORS['endc']])
 
-def get_name():
-    """Returns name from .gitconfig or None."""
-    path = os.path.expanduser('~/.gitconfig')
-    if os.path.isfile(path):
-        with open(path, 'r') as open_f:
-            contents = open_f.read()
-            match = re.search(r'name = (.+)$', contents, re.MULTILINE)
-            if match:
-                return match.group(1).strip()
-    return None
 
 def validate_file_arg():
     """Returns file path if there's a valid file argument. Exits otherwise."""
@@ -62,19 +138,10 @@ def validate_file_arg():
     return target_file
 
 
-def blame(target_file):
-    """Returns git blame results."""
-    try:
-        results = subprocess.check_output(['git', 'blame', target_file])
-    except subprocess.CalledProcessError:
-        sys.exit("Unable to blame file")
-    return results
-
-
-def pylint(target_file):
+def pylint(path):
     """Returns pylint results."""
     proc = subprocess.Popen(
-        ['pylint', '--output-format=text', target_file],
+        'pylint --output-format=text {}'.format(path),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         shell=True
@@ -85,10 +152,10 @@ def pylint(target_file):
     return out
 
 
-def pep8(target_file):
+def pep8(path):
     """Returns pep8 results."""
     proc = subprocess.Popen(
-        ['pep8', target_file],
+        ['pep8', path],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE
     )
@@ -97,63 +164,51 @@ def pep8(target_file):
         sys.exit(err)
     return out
 
-def get_problems(target_file):
-    results = pep8(target_file)
-    problems = []
+
+def pylint_problems(path):
+    results = pylint(path)
+    for code, line, col, msg in REXES['pylint'].findall(results):
+        yield Problem('pylint', line, col, code, msg)
+
+
+def pep8_problems(path):
+    results = pep8(path)
     for line, col, code, msg in REXES['pep8'].findall(results):
-        problems.append(
-            Problem(
-                line=int(line),
-                column=col,
-                code=code,
-                message=msg.strip()
-            )
-        )
-    return problems
+        yield Problem('pep8', line, col, code, msg)
 
-def print_results(target_file, my_name):
+
+def print_results(target_file):
     """Prints formatted results."""
-    print(color('header', target_file))
-    blame_results = blame(target_file)
-    blame_lines = blame_results.splitlines()
-    blame_name_rex = re.compile(r'\(([\w\s]+)\d{4}')
+    print(color('header', target_file.path))
 
-    problems = get_problems(target_file)
-
-    if len(problems) == 0:
+    if not target_file.has_problems:
         print(color('bold', 'All clean!'))
-    for i, problem in enumerate(problems):
-        color_key = PYLINT_COLORS.get(problem.code)
-        name_match = blame_name_rex.search(blame_lines[problem.line - 1])
-        if name_match:
-            name = name_match.group(1).strip()
-        else:
-            name = '???'
+    else:
+        for line, problems in target_file.problems:
+            author = target_file.author(line)
+            author_color = 'blue'
+            if author == ENV.git_name:
+                author_color = 'warn'
 
-        if name == my_name:
-            name_str = ''.join(
-                [
-                    color('bold', '['),
-                    color('fail', '!'),
-                    color('warn', name),
-                    color('fail', '!'),
-                    color('bold', ']'),
-                ]
-            )
-        else:
-            name_str = '[{}]'.format(name)
+            print('{}: [{}] {}'.format(
+                color('bold', line),
+                color(author_color, author),
+                target_file.lines[line - 1].strip(),
+            ))
 
-        print('{lineno}: [{code}] {message} {name}'.format(
-            code=color(color_key, problem.code),
-            lineno=problem.line,
-            message=color(color_key, problem.message),
-            name=name_str
-        ))
+            for problem in problems:
+                color_key = PYLINT_COLORS.get(problem.problem_code)
+                print('{space} [{code}] {msg}'.format(
+                    space=' '.join(['' for i in range(len(str(line)) + 2)]),
+                    code=problem.problem_code,
+                    msg=color('bold', problem.message)
+                ))
+            print
     print
 
 
 def clear():
-    os.system('cls' if os.name=='nt' else 'clear')
+    os.system('cls' if os.name == 'nt' else 'clear')
 
 
 def get_git_path():
@@ -170,13 +225,15 @@ def get_branch_files():
     combined = set(changed_files.splitlines() + branch_files.splitlines())
     return [f.strip() for f in combined if f.endswith('py')]
 
+
 def get_target_files():
     if '--branch' in sys.argv:
         files = get_branch_files()
-    else:    
+    else:
         files = [validate_file_arg()]
     top_path = get_git_path()
     return [os.path.join(top_path, f) for f in files]
+
 
 def get_additional_files(current_files):
     target_files = get_target_files()
@@ -186,15 +243,27 @@ def get_additional_files(current_files):
     )
 
 
-def run(files, my_name):
+def run(files):
     clear()
-    for f in files:
-        print_results(f, my_name)
+    start = datetime.datetime.now()
+    for path in files:
+        target = TargetFile(path)
+        with open(path, 'r') as open_f:
+            target.set_contents(open_f.read())
+        for problem in pylint_problems(path):
+            target.add_problem(problem)
+        for problem in pep8_problems(path):
+            target.add_problem(problem)
+        print_results(target)
+
+    duration = datetime.datetime.now() - start
+    print('Finished linting in {} seconds'.format(
+        float(duration.seconds) + float(duration.microseconds) / 1000000
+    ))
 
 
 def watch(files):
-    my_name = get_name()
-    modified = {f:os.path.getmtime(f) for f in files}
+    modified = {f: os.path.getmtime(f) for f in files}
     loop_count = 0
 
     while True:
@@ -216,12 +285,9 @@ def watch(files):
                     break
 
         if should_run or loop_count == 0:
-            run(modified.keys(), my_name)
+            run(modified.keys())
         loop_count += 1
         time.sleep(2)
 
 if __name__ == '__main__':
     watch(get_target_files())
-
-
-
