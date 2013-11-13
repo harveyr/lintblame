@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-"""lintblame"""
+"""lintblame!!!"""
 
 import os
 import sys
@@ -227,10 +227,13 @@ def get_branch_files():
 
 
 def get_target_files():
-    if '--branch' in sys.argv:
+    if '--branch' in sys.argv or '-b' in sys.argv:
         files = get_branch_files()
     else:
-        files = [validate_file_arg()]
+        if os.path.isdir(sys.argv[1]):
+            files = [f for f in os.listdir(sys.argv[1]) if f.endswith('.py')]
+        else:
+            files = [validate_file_arg()]
     top_path = get_git_path()
     return [os.path.join(top_path, f) for f in files]
 
@@ -244,8 +247,8 @@ def get_additional_files(current_files):
 
 
 def run(files):
-    clear()
     start = datetime.datetime.now()
+    target_files = []
     for path in files:
         target = TargetFile(path)
         with open(path, 'r') as open_f:
@@ -254,6 +257,10 @@ def run(files):
             target.add_problem(problem)
         for problem in pep8_problems(path):
             target.add_problem(problem)
+        target_files.append(target)
+
+    clear()
+    for target in target_files:
         print_results(target)
 
     duration = datetime.datetime.now() - start
@@ -285,9 +292,13 @@ def watch(files):
                     break
 
         if should_run or loop_count == 0:
+            if loop_count > 0:
+                print('Refreshing...')
             run(modified.keys())
         loop_count += 1
-        time.sleep(2)
+        time.sleep(1.5)
 
 if __name__ == '__main__':
+    if len(sys.argv) == 1:
+        sys.argv.append('--branch')
     watch(get_target_files())
