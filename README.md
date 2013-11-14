@@ -1,4 +1,5 @@
 lintblame
 =========
 
-Combine linter and git-blame results for Python files. WIP.
+See my Go version instead. I probably won't continue with this one.
+
